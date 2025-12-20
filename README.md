@@ -8,7 +8,7 @@
 
 **A complete web-based solution for managing isolated Antigravity application profiles on Linux**
 
-[Features](#-features) • [Installation](#-installation) • [Usage](#-usage) • [Documentation](#-documentation)
+[Features](#-features) • [Installation](#-installation) • [Usage](#-usage) • [Documentation](#-documentation) • [Namespace Isolation](NAMESPACE_ISOLATION.md) • [Browser Authentication](BROWSER_AUTHENTICATION.md)
 
 </div>
 
@@ -18,7 +18,7 @@
 
 Antigravity Isolation Manager is a powerful, production-ready web application that allows you to run multiple isolated Antigravity application instances on Linux. Each profile runs natively with complete data isolation, while maintaining seamless desktop integration.
 
-**Note**: Antigravity uses the host browser for authentication, so profiles run natively (not in Docker containers) to ensure proper browser integration.
+**Note**: Antigravity uses the host browser for authentication. All profiles are authenticated by the host browser, ensuring proper authentication even with namespace-level isolation. The system preserves D-Bus session bus access, X11/Wayland display access, and XAUTHORITY to maintain browser authentication functionality.
 
 Perfect for:
 - 🏢 **Work/Personal Separation** - Keep work and personal Antigravity instances completely isolated
@@ -39,11 +39,22 @@ Perfect for:
 - React-like component architecture for maintainability
 
 ### 🔐 Complete Isolation
+- **Namespace-Level Isolation** - Kernel-level isolation using Linux namespaces
+  - Mount namespace: Isolated filesystem view
+  - PID namespace: Isolated process tree
+  - User namespace: Isolated UID/GID mapping
+  - UTS namespace: Isolated hostname
+  - Configurable isolation modes (mount, user, full, none)
 - Each profile uses a separate data directory
 - Filesystem isolation (only profile directory used)
 - No access to other profile data
 - Native execution for proper browser authentication
 - Profile size monitoring in the dashboard
+- **Browser Authentication Preserved** - All profiles authenticated by host browser
+  - D-Bus session bus access maintained
+  - X11/Wayland display access preserved
+  - XAUTHORITY preserved for X11 authentication
+  - See [Browser Authentication Documentation](BROWSER_AUTHENTICATION.md) for details
 
 ### 🖥️ Desktop Integration
 - Profiles appear as native apps in your application menu
@@ -74,11 +85,14 @@ Perfect for:
 - Opens web interface automatically after installation
 
 ### 🔊 Full Feature Support
+- ✅ **Namespace-Level Isolation** - Kernel-level process isolation (see [Namespace Isolation Documentation](NAMESPACE_ISOLATION.md))
 - ✅ Native execution (uses host browser for authentication)
+- ✅ **Browser Authentication** - All profiles authenticated by host browser (see [Browser Authentication Documentation](BROWSER_AUTHENTICATION.md))
 - ✅ Profile data isolation
 - ✅ Export/Import Profiles - Backup and restore profiles easily (ZIP format)
 - ✅ Automatic Desktop Entry Creation
 - ✅ Process management and monitoring
+- ✅ Real-time profile status and size monitoring
 
 ## 📋 Requirements
 
@@ -107,7 +121,7 @@ The installer will:
 3. 📁 Copy files to `~/.local/share/antigravity-isolation-manager`
 4. 🔧 Set up systemd service
 5. 🌐 Start the web interface
-6. 🎉 Open `http://localhost:5000` automatically
+6. 🎉 Open `http://localhost:5001` automatically
 
 **Installation Location**: `~/.local/share/antigravity-isolation-manager`
 
@@ -227,10 +241,11 @@ ps aux | grep antigravity
 ```
 antigravity-isolation/
 ├── app/
-│   ├── app.py                 # Flask web application
-│   ├── config.py              # Configuration
-│   ├── process_manager.py     # Native process lifecycle
-│   ├── desktop_manager.py      # Desktop entry management
+│   ├── app.py                      # Flask web application
+│   ├── config.py                   # Configuration
+│   ├── process_manager.py          # Native process lifecycle with namespace isolation
+│   ├── namespace_manager.py        # Linux namespace isolation management
+│   ├── desktop_entry_manager.py    # Desktop entry management
 │   ├── static/
 │   │   ├── css/style.css      # UI styling
 │   │   ├── js/app.js          # Frontend logic
@@ -251,6 +266,8 @@ antigravity-isolation/
 - **Backend**: Python 3 + Flask
 - **Frontend**: Vanilla JavaScript (no frameworks)
 - **Process Management**: psutil for native process handling
+- **Isolation**: Linux namespaces (mount, PID, user, UTS) - See [Namespace Isolation Documentation](NAMESPACE_ISOLATION.md)
+- **Browser Authentication**: Preserved via D-Bus, X11/Wayland - See [Browser Authentication Documentation](BROWSER_AUTHENTICATION.md)
 - **Service Management**: systemd
 - **Desktop Integration**: .desktop files + XDG standards
 
@@ -270,13 +287,53 @@ antigravity-isolation/
 - **Location**: `~/.local/share/applications/`
 - **Format**: `antigravity-[ProfileName].desktop`
 
+### Namespace Isolation
+
+Namespace isolation is enabled by default and can be configured via environment variables:
+
+```bash
+# Enable/disable namespace isolation (default: true)
+export ANTIGRAVITY_USE_NAMESPACES=true
+
+# Set isolation mode: mount, user, full, or none (default: mount)
+export ANTIGRAVITY_NAMESPACE_MODE=mount
+
+# Enable network namespace (not recommended, breaks browser functionality)
+export ANTIGRAVITY_USE_NET_NS=false
+```
+
+**Available Modes:**
+- `mount` - Mount namespace only (recommended, best compatibility)
+- `user` - User namespace only (lightweight isolation)
+- `full` - Full namespace isolation (mount + PID + user + UTS, IPC disabled for browser auth)
+- `none` - No namespace isolation (directory-based only)
+
+For detailed information, see [Namespace Isolation Documentation](NAMESPACE_ISOLATION.md).
+
+### Browser Authentication
+
+All profiles are authenticated by the host browser, regardless of namespace isolation mode. The system preserves:
+- D-Bus session bus access
+- X11/Wayland display access
+- XAUTHORITY for X11 authentication
+- Network access to localhost
+
+For detailed information, see [Browser Authentication Documentation](BROWSER_AUTHENTICATION.md).
+
 ## 🔐 Security Features
 
+- ✅ **Namespace-Level Isolation** - Kernel-level process isolation
+  - Mount namespace: Isolated filesystem view
+  - PID namespace: Isolated process tree
+  - User namespace: Isolated UID/GID mapping
+  - UTS namespace: Isolated hostname
 - ✅ Native execution (proper browser authentication)
+- ✅ **Browser Authentication Preserved** - All profiles use host browser for authentication
 - ✅ Filesystem isolation (only profile directory used)
 - ✅ Web interface bound to localhost only
 - ✅ No cross-profile data contamination
 - ✅ Process isolation per profile
+- ✅ IPC namespace disabled in full mode to preserve D-Bus for browser authentication
 
 ## 🐛 Troubleshooting
 
@@ -370,6 +427,11 @@ Built with:
 - [psutil](https://github.com/giampaolo/psutil) - Process management
 - [Antigravity](https://antigravity.com/) - Application
 - Love ❤️ - The secret ingredient
+
+## 📚 Additional Documentation
+
+- **[Namespace Isolation Guide](NAMESPACE_ISOLATION.md)** - Complete guide to namespace-level isolation
+- **[Browser Authentication Guide](BROWSER_AUTHENTICATION.md)** - How browser authentication is preserved
 
 ## 📞 Support
 

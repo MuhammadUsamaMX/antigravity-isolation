@@ -5,7 +5,7 @@ from flask import Flask, render_template, jsonify, request
 import os
 import shutil
 from process_manager import ProcessManager
-from desktop_manager import DesktopManager
+from desktop_entry_manager import DesktopEntryManager
 from config import HOST, PORT, DEBUG, ANTIGRAVITY_PROFILES_DIR
 
 app = Flask(__name__)
@@ -15,7 +15,7 @@ LAUNCHER_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(__file__)),
                                'scripts', 'antigravity-launcher.sh')
 
 process_mgr = ProcessManager()
-desktop_mgr = DesktopManager(LAUNCHER_SCRIPT)
+desktop_mgr = DesktopEntryManager(LAUNCHER_SCRIPT)
 
 @app.route('/')
 def index():

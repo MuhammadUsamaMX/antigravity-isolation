@@ -1,10 +1,11 @@
 """
-Desktop Manager - Handle .desktop file creation and management
+Desktop Entry Manager - Handle .desktop file creation and management
+Manages desktop entries for namespace-isolated Antigravity profiles
 """
 import os
 from config import DESKTOP_ENTRIES_DIR
 
-class DesktopManager:
+class DesktopEntryManager:
     def __init__(self, launcher_script_path):
         self.launcher_script_path = os.path.abspath(launcher_script_path)
     

@@ -6,16 +6,32 @@ import subprocess
 import psutil
 import signal
 import time
-from config import ANTIGRAVITY_PROFILES_DIR, CONTAINER_PREFIX
-from desktop_manager import DesktopManager
+from config import (ANTIGRAVITY_PROFILES_DIR, 
+                   USE_NAMESPACE_ISOLATION, NAMESPACE_MODE, USE_NETWORK_NAMESPACE)
+from desktop_entry_manager import DesktopEntryManager
+from namespace_manager import NamespaceManager
 
 class ProcessManager:
     def __init__(self):
-        # Initialize desktop manager for creating desktop entries
+        # Initialize desktop entry manager for creating desktop entries
         launcher_script = os.path.join(os.path.dirname(os.path.dirname(__file__)), 
                                        'scripts', 'antigravity-launcher.sh')
-        self.desktop_mgr = DesktopManager(launcher_script)
+        self.desktop_mgr = DesktopEntryManager(launcher_script)
         self.antigravity_command = self._find_antigravity_command()
+        
+        # Initialize namespace manager if namespace isolation is enabled
+        self.use_namespaces = USE_NAMESPACE_ISOLATION and NAMESPACE_MODE != 'none'
+        if self.use_namespaces:
+            try:
+                self.namespace_mgr = NamespaceManager(use_network_namespace=USE_NETWORK_NAMESPACE)
+                print(f"✅ Namespace isolation enabled (mode: {NAMESPACE_MODE})")
+            except Exception as e:
+                print(f"⚠️  Failed to initialize namespace manager: {e}")
+                print("   Falling back to directory-based isolation")
+                self.use_namespaces = False
+                self.namespace_mgr = None
+        else:
+            self.namespace_mgr = None
     
     def _find_antigravity_command(self):
         """Find the Antigravity executable"""
@@ -93,7 +109,7 @@ class ProcessManager:
         return None
     
     def container_status(self, profile_name):
-        """Get process status (using same API as Docker manager)"""
+        """Get process status (compatible API for namespace-isolated processes)"""
         proc = self._get_process_by_profile(profile_name)
         if proc:
             try:
@@ -167,15 +183,78 @@ class ProcessManager:
         if 'DISPLAY' not in env:
             env['DISPLAY'] = ':0'
         
+        # CRITICAL: Preserve host browser authentication
+        # Antigravity uses the host browser for authentication, so we must preserve:
+        # 1. D-Bus session bus access (for browser communication)
+        # 2. XAUTHORITY for X11 authentication
+        # 3. Wayland display access
+        
+        # Preserve D-Bus session bus for browser authentication
+        if 'DBUS_SESSION_BUS_ADDRESS' not in env:
+            # Try to get D-Bus address from user session
+            dbus_socket = f'/run/user/{os.getuid()}/bus'
+            if os.path.exists(dbus_socket):
+                env['DBUS_SESSION_BUS_ADDRESS'] = f'unix:path={dbus_socket}'
+            else:
+                # Try to get from systemd user session
+                try:
+                    result = subprocess.run(
+                        ['systemctl', '--user', 'show-environment'],
+                        capture_output=True,
+                        text=True,
+                        timeout=2
+                    )
+                    if result.returncode == 0:
+                        for line in result.stdout.split('\n'):
+                            if line.startswith('DBUS_SESSION_BUS_ADDRESS='):
+                                env['DBUS_SESSION_BUS_ADDRESS'] = line.split('=', 1)[1]
+                                break
+                except:
+                    pass
+        
+        # Preserve XAUTHORITY for X11 authentication
+        if 'XAUTHORITY' not in env:
+            xauth_file = os.path.expanduser('~/.Xauthority')
+            if os.path.exists(xauth_file):
+                env['XAUTHORITY'] = xauth_file
+        
         # Try both ANTIGRAVITY_HOME (if supported) and --user-data-dir (Electron standard)
         env['ANTIGRAVITY_HOME'] = profile_dir
         
         # Launch Antigravity with --user-data-dir flag (Electron/Chromium standard)
         # Use dbus-launch or run in user session to ensure window appears
-        cmd = [
+        base_cmd = [
             self.antigravity_command,
             '--user-data-dir', profile_dir
         ]
+        
+        # Apply namespace isolation if enabled
+        if self.use_namespaces and self.namespace_mgr:
+            try:
+                if NAMESPACE_MODE == 'full':
+                    # Full namespace isolation (mount, PID, user, UTS, IPC)
+                    cmd = self.namespace_mgr.create_namespace_command(
+                        profile_name, profile_dir, base_cmd, env
+                    )
+                elif NAMESPACE_MODE == 'mount':
+                    # Mount namespace only (filesystem isolation)
+                    cmd = self.namespace_mgr.create_mount_namespace_only(
+                        profile_name, profile_dir, base_cmd, env
+                    )
+                elif NAMESPACE_MODE == 'user':
+                    # User namespace only (UID/GID isolation)
+                    cmd = self.namespace_mgr.create_user_namespace_only(
+                        profile_name, profile_dir, base_cmd, env
+                    )
+                else:
+                    # Fallback to no namespace
+                    cmd = base_cmd
+            except Exception as e:
+                print(f"⚠️  Failed to create namespace command: {e}")
+                print("   Falling back to directory-based isolation")
+                cmd = base_cmd
+        else:
+            cmd = base_cmd
         
         try:
             log_file = os.path.join(profile_dir, 'antigravity.log')
@@ -241,26 +320,42 @@ class ProcessManager:
             
             # Fallback: Direct launch (may not show window if launched from systemd)
             with open(log_file, 'a') as log:
-                # Set XAUTHORITY for X11
+                # Ensure X11 access for browser authentication
+                # XAUTHORITY and DBUS_SESSION_BUS_ADDRESS should already be set above
                 if env.get('DISPLAY', '').startswith(':'):
-                    xauth_file = os.path.expanduser('~/.Xauthority')
-                    if os.path.exists(xauth_file):
-                        env['XAUTHORITY'] = xauth_file
-                    # Also try to allow X11 access
+                    # Double-check XAUTHORITY is set (for browser authentication)
+                    if 'XAUTHORITY' not in env:
+                        xauth_file = os.path.expanduser('~/.Xauthority')
+                        if os.path.exists(xauth_file):
+                            env['XAUTHORITY'] = xauth_file
+                    # Allow X11 access (required for browser authentication)
                     try:
                         subprocess.run(['xhost', '+local:'], timeout=1, 
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     except:
                         pass
                 
-                process = subprocess.Popen(
-                    cmd,
-                    env=env,
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    start_new_session=True,
-                    cwd=profile_dir
-                )
+                # For namespace isolation, we need to pass env differently
+                # Namespace commands handle env internally
+                if self.use_namespaces and NAMESPACE_MODE in ['full', 'mount', 'user']:
+                    # Namespace manager handles environment internally
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                        cwd=profile_dir
+                    )
+                else:
+                    # Standard launch with environment
+                    process = subprocess.Popen(
+                        cmd,
+                        env=env,
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                        cwd=profile_dir
+                    )
             
             # Give it a moment to start
             import time
@@ -305,7 +400,7 @@ class ProcessManager:
         return {"status": "not_found"}
     
     def remove_container(self, profile_name):
-        """Stop and cleanup process (same API as Docker)"""
+        """Stop and cleanup process (compatible API for namespace-isolated processes)"""
         return self.stop_container(profile_name)
     
     def get_profile_size(self, profile_name):
