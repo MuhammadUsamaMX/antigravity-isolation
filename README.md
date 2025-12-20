@@ -266,10 +266,11 @@ antigravity-isolation/
 - **Backend**: Python 3 + Flask
 - **Frontend**: Vanilla JavaScript (no frameworks)
 - **Process Management**: psutil for native process handling
-- **Isolation**: Linux namespaces (mount, PID, user, UTS) - See [Namespace Isolation Documentation](NAMESPACE_ISOLATION.md)
+- **Isolation**: Linux namespaces (mount, PID, user, UTS) with automatic fallback - See [Namespace Isolation Documentation](NAMESPACE_ISOLATION.md)
 - **Browser Authentication**: Preserved via D-Bus, X11/Wayland - See [Browser Authentication Documentation](BROWSER_AUTHENTICATION.md)
-- **Service Management**: systemd
+- **Service Management**: systemd (waits for graphical session)
 - **Desktop Integration**: .desktop files + XDG standards
+- **Robustness**: Automatic fallback to directory-based isolation when namespace isolation isn't available
 
 ## 🔧 Configuration
 
@@ -307,6 +308,8 @@ export ANTIGRAVITY_USE_NET_NS=false
 - `user` - User namespace only (lightweight isolation)
 - `full` - Full namespace isolation (mount + PID + user + UTS, IPC disabled for browser auth)
 - `none` - No namespace isolation (directory-based only)
+
+**Automatic Fallback**: If namespace isolation is not permitted (e.g., when running from systemd without proper capabilities), the system automatically falls back to directory-based isolation. This ensures profiles always start successfully.
 
 For detailed information, see [Namespace Isolation Documentation](NAMESPACE_ISOLATION.md).
 
@@ -367,6 +370,32 @@ sudo journalctl -u antigravity-manager.service -f
 
 # Verify profile directory exists
 ls -la ~/Antigravity/
+
+# Check profile-specific logs
+cat ~/Antigravity/[ProfileName]/antigravity.log
+```
+
+### Profiles not starting after reboot
+The service is configured to wait for the graphical session to be ready. If profiles still don't start:
+
+```bash
+# Check if service is waiting for graphical session
+sudo systemctl status antigravity-manager.service
+
+# Verify graphical session is active
+loginctl list-sessions
+
+# Restart the service
+sudo systemctl restart antigravity-manager.service
+```
+
+### Namespace isolation errors
+If you see "Operation not permitted" errors, the system automatically falls back to directory-based isolation. This is normal and expected when running from systemd. To explicitly disable namespace isolation:
+
+```bash
+export ANTIGRAVITY_USE_NAMESPACES=false
+# or
+export ANTIGRAVITY_NAMESPACE_MODE=none
 ```
 
 ### Desktop entry not appearing

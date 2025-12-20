@@ -154,17 +154,67 @@ class ProcessManager:
         # When launched from systemd, we need to get the user's display session
         env = os.environ.copy()
         
-        # Get the actual user's display (not systemd's)
-        # Try to get DISPLAY from the user's session
+        # Get the actual user's display and session environment
+        # This is critical after reboot - we need to get the user's session environment
         user = os.getenv('USER') or os.getenv('LOGNAME') or os.getlogin()
         
-        # Try to get DISPLAY from active user sessions
+        # Try to get environment from active user sessions
+        # After reboot, we need to find the logged-in user's session
         try:
             import pwd
             user_info = pwd.getpwnam(user)
-            # Check for common display locations
-            for display_var in ['DISPLAY', 'WAYLAND_DISPLAY']:
-                # Try to get from systemd user session
+            
+            # Method 1: Try to get from systemd user session (if user is logged in)
+            try:
+                result = subprocess.run(
+                    ['systemctl', '--user', '--machine', f'{user}@.host', 'show-environment'],
+                    capture_output=True,
+                    text=True,
+                    timeout=2
+                )
+                if result.returncode == 0:
+                    for line in result.stdout.split('\n'):
+                        if '=' in line:
+                            key, value = line.split('=', 1)
+                            if key in ['DISPLAY', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'XAUTHORITY']:
+                                env[key] = value
+            except:
+                pass
+            
+            # Method 2: Try to get from logged-in user's environment
+            # Find the logged-in user's session
+            try:
+                # Get the user's active session
+                result = subprocess.run(
+                    ['loginctl', 'list-sessions', '--no-legend'],
+                    capture_output=True,
+                    text=True,
+                    timeout=2
+                )
+                if result.returncode == 0:
+                    for line in result.stdout.split('\n'):
+                        if user in line and 'active' in line.lower():
+                            # Extract session ID
+                            session_id = line.split()[0]
+                            # Get environment from this session
+                            env_result = subprocess.run(
+                                ['loginctl', 'show-session', session_id, '-p', 'Display', '-p', 'Type'],
+                                capture_output=True,
+                                text=True,
+                                timeout=2
+                            )
+                            if env_result.returncode == 0:
+                                for env_line in env_result.stdout.split('\n'):
+                                    if 'Display=' in env_line:
+                                        display = env_line.split('=', 1)[1]
+                                        if display:
+                                            env['DISPLAY'] = display
+                            break
+            except:
+                pass
+            
+            # Method 3: Try to get from systemd user session (simpler method)
+            try:
                 result = subprocess.run(
                     ['systemctl', '--user', 'show-environment'],
                     capture_output=True,
@@ -173,11 +223,15 @@ class ProcessManager:
                 )
                 if result.returncode == 0:
                     for line in result.stdout.split('\n'):
-                        if line.startswith(f'{display_var}='):
-                            env[display_var] = line.split('=', 1)[1]
-                            break
-        except:
-            pass
+                        if '=' in line:
+                            key, value = line.split('=', 1)
+                            if key in ['DISPLAY', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'XAUTHORITY']:
+                                env[key] = value
+            except:
+                pass
+                
+        except Exception as e:
+            print(f"⚠️  Warning: Could not get user session environment: {e}")
         
         # Fallback to default display
         if 'DISPLAY' not in env:
@@ -267,56 +321,37 @@ class ProcessManager:
             )
             
             # If launcher script exists, use it - it will launch in user's session
+            # After reboot, we need to ensure we have the user's session environment
             if os.path.exists(launcher_script):
+                # Instead of using su/runuser (which requires password),
+                # we'll use the launcher script directly with proper environment
+                # The launcher script will handle the user session environment
                 try:
-                    # Get the logged-in user
-                    result = subprocess.run(
-                        ['who'], capture_output=True, text=True, timeout=2
-                    )
-                    session_user = None
-                    if result.returncode == 0:
-                        for line in result.stdout.split('\n'):
-                            if line.strip():
-                                parts = line.split()
-                                if parts:
-                                    session_user = parts[0]
-                                    break
+                    # Use dbus-run-session or directly execute with environment
+                    # First, try to get the user's session environment
+                    launcher_env = env.copy()
                     
-                    # Try to execute launcher script as the logged-in user
-                    if session_user:
-                        try:
-                            # Use runuser to execute as the logged-in user
-                            runuser_cmd = [
-                                'runuser', '-u', session_user, '--',
-                                'bash', launcher_script, profile_name
-                            ]
-                            process = subprocess.Popen(
-                                runuser_cmd,
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                                start_new_session=True
-                            )
-                            time.sleep(1)
-                            if process.poll() is None or process.returncode == 0:
-                                return {"status": "created", "pid": "launcher-script"}
-                        except (FileNotFoundError, PermissionError):
-                            # Fallback: try su
-                            try:
-                                su_cmd = ['su', '-', session_user, '-c', 
-                                         f'bash {launcher_script} {profile_name}']
-                                process = subprocess.Popen(
-                                    su_cmd,
-                                    stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL,
-                                    start_new_session=True
-                                )
-                                time.sleep(1)
-                                if process.poll() is None or process.returncode == 0:
-                                    return {"status": "created", "pid": "launcher-script"}
-                            except:
-                                pass
-                except:
-                    pass
+                    # Ensure we have the necessary environment variables
+                    if 'DBUS_SESSION_BUS_ADDRESS' not in launcher_env:
+                        dbus_socket = f'/run/user/{os.getuid()}/bus'
+                        if os.path.exists(dbus_socket):
+                            launcher_env['DBUS_SESSION_BUS_ADDRESS'] = f'unix:path={dbus_socket}'
+                    
+                    # Execute launcher script directly (it runs as the current user)
+                    # The launcher script will handle namespace isolation and environment
+                    process = subprocess.Popen(
+                        ['bash', launcher_script, profile_name],
+                        env=launcher_env,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True
+                    )
+                    time.sleep(1)
+                    if process.poll() is None or process.returncode == 0:
+                        return {"status": "created", "pid": "launcher-script"}
+                except Exception as e:
+                    print(f"⚠️  Failed to launch via launcher script: {e}")
+                    # Fall through to direct launch
             
             # Fallback: Direct launch (may not show window if launched from systemd)
             with open(log_file, 'a') as log:
@@ -337,15 +372,58 @@ class ProcessManager:
                 
                 # For namespace isolation, we need to pass env differently
                 # Namespace commands handle env internally
+                # But if namespace fails, we need to fall back to direct launch
                 if self.use_namespaces and NAMESPACE_MODE in ['full', 'mount', 'user']:
-                    # Namespace manager handles environment internally
-                    process = subprocess.Popen(
-                        cmd,
-                        stdout=log,
-                        stderr=subprocess.STDOUT,
-                        start_new_session=True,
-                        cwd=profile_dir
-                    )
+                    try:
+                        # Try namespace launch first
+                        process = subprocess.Popen(
+                            cmd,
+                            stdout=log,
+                            stderr=subprocess.STDOUT,
+                            start_new_session=True,
+                            cwd=profile_dir
+                        )
+                        
+                        # Wait a moment to see if it fails immediately
+                        time.sleep(0.5)
+                        
+                        # Check if process is still running or if it failed
+                        if process.poll() is not None:
+                            # Process exited, check if it was a namespace error
+                            log.seek(0, 2)  # Seek to end
+                            log_content = ""
+                            try:
+                                with open(log_file, 'r') as f:
+                                    log_content = f.read()
+                            except:
+                                pass
+                            
+                            if 'Operation not permitted' in log_content or 'unshare failed' in log_content:
+                                # Namespace failed, fall back to direct launch
+                                print(f"⚠️  Namespace isolation failed for {profile_name}, falling back to direct launch")
+                                log.write(f"\n[Fallback] Namespace isolation failed, using direct launch\n")
+                                cmd = base_cmd
+                                process = subprocess.Popen(
+                                    cmd,
+                                    env=env,
+                                    stdout=log,
+                                    stderr=subprocess.STDOUT,
+                                    start_new_session=True,
+                                    cwd=profile_dir
+                                )
+                    except Exception as e:
+                        # Namespace launch failed, fall back to direct
+                        print(f"⚠️  Namespace launch failed: {e}, falling back to direct launch")
+                        log.write(f"\n[Fallback] Namespace launch exception: {e}\n")
+                        cmd = base_cmd
+                        process = subprocess.Popen(
+                            cmd,
+                            env=env,
+                            stdout=log,
+                            stderr=subprocess.STDOUT,
+                            start_new_session=True,
+                            cwd=profile_dir
+                        )
                 else:
                     # Standard launch with environment
                     process = subprocess.Popen(

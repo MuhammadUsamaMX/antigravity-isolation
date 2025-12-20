@@ -1,18 +1,19 @@
 [Unit]
 Description=Antigravity Isolation Manager Web Interface
 After=network.target
+After=graphical-session.target
+Wants=graphical-session.target
 
 [Service]
 Type=simple
 User=%u
 WorkingDirectory=%h/.local/share/antigravity-isolation-manager/app
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+# Wait for user session to be ready (D-Bus, X11/Wayland available)
+ExecStartPre=/bin/sleep 5
 ExecStart=/usr/bin/python3 %h/.local/share/antigravity-isolation-manager/app/app.py
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-
-
-

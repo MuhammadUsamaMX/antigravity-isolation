@@ -134,12 +134,16 @@ cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=Antigravity Isolation Manager Web Interface
 After=network.target
+After=graphical-session.target
+Wants=graphical-session.target
 
 [Service]
 Type=simple
 User=$USER
 WorkingDirectory=$INSTALL_DIR/app
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+# Wait for user session to be ready (D-Bus, X11/Wayland available)
+ExecStartPre=/bin/sleep 5
 ExecStart=/usr/bin/python3 $INSTALL_DIR/app/app.py
 Restart=on-failure
 RestartSec=5
