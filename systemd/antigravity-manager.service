@@ -1,0 +1,18 @@
+[Unit]
+Description=Antigravity Isolation Manager Web Interface
+After=network.target
+
+[Service]
+Type=simple
+User=%u
+WorkingDirectory=%h/.local/share/antigravity-isolation-manager/app
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+ExecStart=/usr/bin/python3 %h/.local/share/antigravity-isolation-manager/app/app.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+
+
+
