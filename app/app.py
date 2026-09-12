@@ -211,35 +211,41 @@ def import_profile():
     
     try:
         profile_name = None
-        
+        target_base = os.path.abspath(ANTIGRAVITY_PROFILES_DIR)
+
+        def is_safe_path(member_path):
+            # Check for path traversal (Zip Slip)
+            abs_target = os.path.abspath(os.path.join(target_base, member_path))
+            return os.path.commonpath([target_base, abs_target]) == target_base
+
+        def is_valid_profile_name(name):
+            return bool(name) and all(c.isalnum() or c in '-_' for c in name)
+
         # Try opening as ZIP
         if zipfile.is_zipfile(temp_file.name):
             with zipfile.ZipFile(temp_file.name, 'r') as zipf:
                 file_list = zipf.namelist()
                 if not file_list:
-                    raise Exception('Empty archive')
+                    raise ValueError('Empty archive')
                 
                 # Get profile name from archive structure
                 first_item = file_list[0]
                 if '/' in first_item:
                     profile_name = first_item.split('/')[0]
                 else:
-                    # If no directory structure, use filename without extension
                     profile_name = os.path.splitext(file.filename)[0]
                 
+                if not is_valid_profile_name(profile_name):
+                    raise ValueError('Invalid profile name in archive')
+
                 profile_dir = process_mgr.get_profile_dir(profile_name)
                 if os.path.exists(profile_dir):
-                    raise Exception(f'Profile {profile_name} already exists')
+                    raise ValueError(f'Profile {profile_name} already exists')
                 
-                # Extract all files preserving directory structure
-                # This restores all profile data including:
-                # - Login Data (saved passwords/credentials)
-                # - Cookies
-                # - Bookmarks
-                # - History
-                # - Preferences
-                # - Extensions
-                # - All other profile data
+                for member in file_list:
+                    if not is_safe_path(member):
+                        raise ValueError('Archive contains path traversal file')
+
                 zipf.extractall(path=ANTIGRAVITY_PROFILES_DIR)
                 
         # Try opening as TAR (tar.gz, .tgz, etc)
@@ -247,19 +253,23 @@ def import_profile():
             with tarfile.open(temp_file.name, 'r:*') as tar:
                 members = tar.getmembers()
                 if not members:
-                    raise Exception('Empty archive')
+                    raise ValueError('Empty archive')
                 
-                # Get profile name from archive structure
                 profile_name = members[0].name.split('/')[0]
+                if not is_valid_profile_name(profile_name):
+                    raise ValueError('Invalid profile name in archive')
+
                 profile_dir = process_mgr.get_profile_dir(profile_name)
-                
                 if os.path.exists(profile_dir):
-                    raise Exception(f'Profile {profile_name} already exists')
+                    raise ValueError(f'Profile {profile_name} already exists')
                 
-                # Extract all files preserving directory structure and permissions
+                for member in members:
+                    if not is_safe_path(member.name):
+                        raise ValueError('Archive contains path traversal file')
+
                 tar.extractall(path=ANTIGRAVITY_PROFILES_DIR)
         else:
-            raise Exception('Unsupported archive format. Please use .zip or .tar.gz')
+            raise ValueError('Unsupported archive format. Please use .zip or .tar.gz')
         
         # Verify the profile directory was created
         profile_dir = process_mgr.get_profile_dir(profile_name)
@@ -283,6 +293,10 @@ def import_profile():
             'path': profile_dir,
             'message': 'Profile imported successfully with all data (logins, cookies, bookmarks, history, extensions, etc.)'
         })
+    except ValueError as e:
+        if os.path.exists(temp_file.name):
+            os.unlink(temp_file.name)
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         if os.path.exists(temp_file.name):
             os.unlink(temp_file.name)
