@@ -3,13 +3,27 @@ class App {
     constructor() {
         this.profiles = [];
         this.state = { loading: false };
+        this.theme = localStorage.getItem('theme') || 'dark';
         this.init();
     }
 
     init() {
+        this.applyTheme(this.theme);
         this.setupEventListeners();
         this.loadProfiles();
         setInterval(() => this.loadProfiles(), 5000);
+    }
+
+    applyTheme(theme) {
+        this.theme = theme;
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('theme', theme);
+    }
+
+    toggleTheme() {
+        const nextTheme = this.theme === 'dark' ? 'light' : 'dark';
+        this.applyTheme(nextTheme);
+        this.showToast(`Switched to ${nextTheme} theme`, 'success');
     }
 
     setupEventListeners() {
@@ -17,6 +31,10 @@ class App {
         document.getElementById('importBtn').addEventListener('click', () => this.triggerImport());
         document.getElementById('importFileInput').addEventListener('change', (e) => this.handleImport(e));
         document.getElementById('refreshBtn').addEventListener('click', () => this.loadProfiles());
+        const themeBtn = document.getElementById('themeToggleBtn');
+        if (themeBtn) {
+            themeBtn.addEventListener('click', () => this.toggleTheme());
+        }
         document.getElementById('closeModal').addEventListener('click', () => this.hideModal());
         document.getElementById('cancelBtn').addEventListener('click', () => this.hideModal());
         document.getElementById('modalBackdrop').addEventListener('click', () => this.hideModal());
@@ -325,6 +343,3 @@ class App {
 
 // Initialize app
 const app = new App();
-
-
-
